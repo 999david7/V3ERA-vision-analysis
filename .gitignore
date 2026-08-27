@@ -1,0 +1,37 @@
+# Build output
+/bin/
+/nimcache/
+nimcache/
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Compiled test binaries (Nim drops them beside their source)
+/tests/test_*
+!/tests/test_*.nim
+/examples/*
+!/examples/*.nim
+!/examples/README.md
+
+# Vendored third-party headers -- fetched by scripts/fetch_vendor.sh, which
+# pins the upstream commit and verifies SHA-256 digests. Not checked in: they
+# are 350 KB of code we do not maintain, and the script makes the build
+# reproducible without them.
+/vendor/
+
+# Generated documentation
+/docs/api/
+
+# Local overrides
+nim.cfg.local
+.env
+*.local
+
+# Editors and OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store

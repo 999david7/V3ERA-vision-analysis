@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, ${{ matrix.deps }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        # "full" installs the optional native dependencies; "bare" proves the
+        # degradation path -- the suite must stay green with no OCR engine and
+        # no PDF toolchain installed at all.
+        deps: [full, bare]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: "2.2.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install optional native dependencies (Linux)
+        if: matrix.deps == 'full' && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libtesseract-dev tesseract-ocr tesseract-ocr-eng poppler-utils
+
+      - name: Install optional native dependencies (macOS)
+        if: matrix.deps == 'full' && runner.os == 'macOS'
+        run: brew install tesseract poppler
+
+      - name: Vendor stb headers
+        run: sh scripts/fetch_vendor.sh
+
+      - name: Typecheck
+        run: make check
+
+      - name: Test (native codecs only)
+        run: nim c -r --hints:off --warnings:off tests/test_all.nim
+
+      - name: Test (stb_image backend)
+        run: nim c -r --hints:off --warnings:off -d:v3eraStb tests/test_all.nim
+
+      - name: Test (release build)
+        run: nim c -r -d:release --hints:off --warnings:off -d:v3eraStb tests/test_all.nim
+
+      - name: Build binaries
+        run: make release STB=1
+
+      - name: Smoke-test the CLI
+        run: |
+          ./bin/v3era --version
+          ./bin/v3era capabilities --format json
+
+      - name: Smoke-test the server
+        shell: bash
+        run: |
+          ./bin/v3erad --port 18080 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18080/healthz >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:18080/healthz
+          curl -fsS http://127.0.0.1:18080/readyz
+          curl -fsS http://127.0.0.1:18080/v1/capabilities
+          curl -fsS http://127.0.0.1:18080/metrics | head -5
+
+  docker:
+    name: docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build -t v3era:ci -f docker/Dockerfile .
+      - name: Check the image reports its capabilities
+        run: docker run --rm --entrypoint /usr/local/bin/v3era v3era:ci --version
